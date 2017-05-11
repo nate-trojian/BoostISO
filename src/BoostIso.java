@@ -107,23 +107,25 @@ public class BoostIso {
                             if(sEquivalence(v, other)) {
                                 v.setProperty("hyper_isClique", true);
                                 other.setProperty("hyper_isHidden", true);
-                                Set<Long> sec = (Set<Long>) v.getProperty("hyper_SEC", new HashSet<>());
-                                sec.add(other.getId());
-                                v.setProperty("hyper_SEC", sec);
+                                Long[] sec = (Long[])v.getProperty("hyper_SEC", new Long[0]);
+                                Long[] newSec = Arrays.copyOf(sec, sec.length+1);
+                                newSec[sec.length] = other.getId();
+                                v.setProperty("hyper_SEC", newSec);
                             } else if(sContainment(v, other)) SC.add(other);  //SC-Children
                         }
                         if(v.getProperty("hyper_isClique").equals(false)) {
                             ResourceIterator<Node> twoStep = db.execute("MATCH (u:`" + curLabel + "`)--()--(v:`" + curLabel + "`) " +
-                                    "WHERE id(u)=" + v.getId() + " NOT((u)--(v) OR id(u) = id(v)) " +
-                                    "RETURN DISTINCT {id:id(v)}")
-                                    .<Node>map(n -> db.getNodeById((Long) n.get("id")));
+                                    "WHERE id(u)=" + v.getId() + " AND NOT((u)--(v) OR id(u) = id(v)) " +
+                                    "RETURN DISTINCT id(v)")
+                                    .<Node>map(n -> db.getNodeById((Long) n.get("id(v)")));
                             while(twoStep.hasNext()) {
                                 other = twoStep.next();
                                 if(sEquivalence(v, other)) {
                                     other.setProperty("hyper_isHidden", true);
-                                    Set<Long> sec = (Set<Long>) v.getProperty("hyper_SEC", new HashSet<>());
-                                    sec.add(other.getId());
-                                    v.setProperty("hyper_SEC", sec);
+                                    Long[] sec = (Long[])v.getProperty("hyper_SEC", new Long[0]);
+                                    Long[] newSec = Arrays.copyOf(sec, sec.length+1);
+                                    newSec[sec.length] = other.getId();
+                                    v.setProperty("hyper_SEC", newSec);
                                 } else if(sContainment(v, other)) SC.add(other);  //SC-Children
                             }
                         }
@@ -390,7 +392,7 @@ public class BoostIso {
                 Collection<Long> nodesUsed = temp.values().stream().map(Node::getId)
                         .collect(Collectors.toCollection(ConcurrentLinkedQueue::new));
                 List<Set<Long>> newMappings = temp.values().parallelStream().map(node -> {
-                    Set<Long> possValues = (Set<Long>) node.getProperty("hyper_SEC");
+                    Set<Long> possValues = new HashSet<>(Arrays.asList((Long[])v.getProperty("hyper_SEC")));
                     for(Long l: possValues) {
                         if(nodesUsed.contains(l)) {
                             possValues.remove(l);
