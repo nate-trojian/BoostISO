@@ -143,8 +143,8 @@ public class BoostIso {
                                 //Returns with 1 or none, so hasNext works as a check
                                 //Yes it's ugly
                                 //No I don't care
-                                if(db.execute("MATCH (u)-[hyper_SC]-(v) " +
-                                        "WHERE id(u)=" + p + " AND id(v)=" + n + " RETURN {result:true}").hasNext())
+                                if(db.execute("MATCH (u)-[:hyper_SC]-(v) " +
+                                        "WHERE id(u)=" + p.getId() + " AND id(v)=" + n.getId() + " RETURN {result:true}").hasNext())
                                     continue;
 
                                 if(sContainment(p, n)) {
@@ -167,13 +167,13 @@ public class BoostIso {
         System.out.println("--Adapted Graph Built--");
     }
 
-    // adj(v) - {u} sub adj(u) - {v}
+    // adj(u) - {v} > adj(v) - {u}
     private boolean sContainment(Node u, Node v) {
         Set<Long> adjU = StreamSupport.stream(u.getRelationships().spliterator(), false)
-                .map(Relationship::getId).collect(Collectors.toSet());
+                .map(r -> r.getOtherNode(u).getId()).collect(Collectors.toSet());
         Set<Long> adjV = StreamSupport.stream(v.getRelationships().spliterator(), false)
-                .map(Relationship::getId).collect(Collectors.toSet());
-        if(adjU.size() > adjV.size()) return false;
+                .map(r -> r.getOtherNode(v).getId()).collect(Collectors.toSet());
+        if(adjV.size() > adjU.size()) return false;
         //Faster to remove now than filter after map (worse case equal but best case is faster)
         adjU.remove(v.getId());
         adjV.remove(u.getId());
@@ -182,9 +182,11 @@ public class BoostIso {
 
     private boolean sEquivalence(Node u, Node v) {
         Set<Long> adjU = StreamSupport.stream(u.getRelationships().spliterator(), false)
-                .map(Relationship::getId).collect(Collectors.toSet());
+                .map(r -> r.getOtherNode(u).getId()).collect(Collectors.toSet());
         Set<Long> adjV = StreamSupport.stream(v.getRelationships().spliterator(), false)
-                .map(Relationship::getId).collect(Collectors.toSet());
+                .map(r -> r.getOtherNode(v).getId()).collect(Collectors.toSet());
+        System.out.println("U: " + adjU);
+        System.out.println("V: " + adjV);
         if(adjU.size() > adjV.size()) return false;
         //Faster to remove now than filter after map (worse case equal but best case is faster)
         adjU.remove(v.getId());
@@ -431,6 +433,157 @@ public class BoostIso {
         return false;
     }
 
+    //TODO Put dynamicCL return in searchSpace
+    private boolean subgraphSearch(int i, ArrayList<Node> order, HashMap<Node, ArrayList<Node>> searchSpace,
+                                SolutionSet mappings) {
+        if(mappings.isFilled()) return false;
+
+        boolean flag = false;
+
+        if(i == order.size()) {
+            mappings.nextSolution();
+            HashMap<Node, Node> prev = mappings.prevSolution(), temp = new HashMap<>(prev);
+            Node curr = prev.get(order.get(i-1));
+
+            Collection<Long> nodesUsed = temp.values().stream().map(Node::getId)
+                    .collect(Collectors.toCollection(ConcurrentLinkedQueue::new));
+            List<Set<Long>> newMappings = temp.values().parallelStream().map(node -> {
+                Set<Long> possValues = new HashSet<>(Arrays.asList((Long[])curr.getProperty("hyper_SEC")));
+                for(Long l: possValues) {
+                    if(nodesUsed.contains(l)) {
+                        possValues.remove(l);
+                    }
+                }
+                //Guarantee one value in set
+                possValues.add(node.getId());
+                return possValues;
+            }).collect(Collectors.toList());
+
+            int[] indList = new int[newMappings.size()];
+            Arrays.fill(indList, 0);
+            int k=0;
+            Set<Long> tempSet;
+            while(indList[0] < newMappings.get(0).size()) {
+                if(k == newMappings.size()) {
+                    //Commit mapping
+                    mappings.nextSolution();
+                    k--;
+                }
+                tempSet = newMappings.get(k);
+                if(indList[k] < tempSet.size()) {
+                    //Add to new mapping
+                    k++;
+                } else {
+                    indList[k] = 0;
+                    k--;
+                }
+            }
+            dynamicCL(searchSpace.get(curr), curr);
+            return true;
+        }
+
+        Node curr = order.get(i);
+        ArrayList<Node> space = searchSpace.get(curr);
+
+        for(Node v: space) {
+            if(mappings.inSolution(v) || !check(v, i, order, mappings)) continue;
+            mappings.put(curr, v);
+            if(subgraphSearch(i+1, order, searchSpace, mappings)) {
+                HashMap<Node, Node> prev = mappings.prevSolution();
+                for(int j = 0; j < i; j++) {
+                    mappings.put(order.get(j), prev.get(order.get(j)));
+                }
+                flag = true;
+            }
+        }
+        if(flag) {
+            Node prevNode = order.get(i-1);
+            dynamicCL(searchSpace.get(prevNode), mappings.get(prevNode));
+        }
+
+        searchSpace.put(curr, space);
+        return flag;
+    }
+
+    private ArrayList<Node> dynamicCL(ArrayList<Node> space, Node curr) {
+        ArrayList<Node> ret = new ArrayList<>(space);
+        db.execute("MATCH (u)-[:hyper_SC*]->(v) " +
+                "WHERE id(u)=" + curr.getId() +" " +
+                "RETURN DISTINCT id(v), p AS Path, LENGTH(p) AS PathSize " +
+                "ORDER BY PathSize"
+        ).stream().<Node>map(n -> db.getNodeById((Long) n.get("id(v)"))).forEach(ret::add);
+        //TODO Add in QDC-Children for loop
+        return ret;
+    }
+
+    private HashMap<Node, DRT> buildDRT(Label queryGraphLabel, HashMap<Node, ArrayList<Node>> searchSpace) {
+        HashMap<Node, DRT> ret = new HashMap<>();
+        ArrayList<Node> queryGraph = db.findNodes(queryGraphLabel).stream().collect(Collectors.toCollection(ArrayList::new));
+        for(Node u: queryGraph) {
+            DRT drt = new DRT(u);
+            ArrayList<Node> candidateList = searchSpace.get(u);
+            //BuildDRT method from paper
+            for(int i=0; i<candidateList.size(); i++) {
+                for(int j = i+1; j<candidateList.size(); j++) {
+                    Node h_i = candidateList.get(i);
+                    Node h_j = candidateList.get(j);
+                    if(QDE(u, h_i, h_j)) {
+                        candidateList.remove(h_j);
+                        drt.addQDE(h_i, h_j);
+                        j--;
+                    }
+                }
+            }
+            for(int i=0; i<candidateList.size(); i++) {
+                for(int j = i + 1; j < candidateList.size(); j++) {
+                    Node h_i = candidateList.get(i);
+                    Node h_j = candidateList.get(j);
+                    if(QDC(u, h_i, h_j)) {
+                        drt.addQDCChild(h_i, h_j);
+                        drt.addQDCParent(h_j);
+                    } else if(QDC(u, h_j, h_i)) {
+                        drt.addQDCChild(h_j, h_i);
+                        drt.addQDCParent(h_i);
+                    }
+                }
+            }
+            ret.put(u, drt);
+        }
+        return ret;
+    }
+
+    // adj(h_i) - {h_j} > adj(h_j) - {h_i}
+    private boolean QDC(Node u, Node h_i, Node h_j) {
+        String labelString = StreamSupport.stream(u.getPropertyKeys().spliterator(), false).filter(name -> name.startsWith("profile_"))
+                .map(name -> name.substring(8)).reduce("", (a,b) -> a + "|:" + b);
+        Set<Long> setH_i = db.execute("MATCH (u)--(v" + labelString.substring(1) +  ") " +
+                "WHERE id(u)=" + h_i.getId() + " " +
+                "RETURN id(v)").stream().map(node -> (Long)node.get("id(v)")).collect(Collectors.toSet());
+        Set<Long> setH_j = db.execute("MATCH (u)--(v" + labelString.substring(1) +  ") " +
+                "WHERE id(u)=" + h_j.getId() + " " +
+                "RETURN id(v)").stream().map(node -> (Long)node.get("id(v)")).collect(Collectors.toSet());
+
+        setH_i.remove(h_j.getId());
+        setH_j.remove(h_i.getId());
+        return setH_i.containsAll(setH_j);
+    }
+
+    // adj(h_i) - {h_j} = adj(h_j) - {h_i}
+    private boolean QDE(Node u, Node h_i, Node h_j) {
+        String labelString = StreamSupport.stream(u.getPropertyKeys().spliterator(), false).filter(name -> name.startsWith("profile_"))
+                .map(name -> name.substring(8)).reduce("", (a,b) -> a + "|:" + b);
+        Set<Long> setH_i = db.execute("MATCH (u)--(v" + labelString.substring(1) +  ") " +
+                "WHERE id(u)=" + h_i.getId() + " " +
+                "RETURN id(v)").stream().map(node -> (Long)node.get("id(v)")).collect(Collectors.toSet());
+        Set<Long> setH_j = db.execute("MATCH (u)--(v" + labelString.substring(1) +  ") " +
+                "WHERE id(u)=" + h_j.getId() + " " +
+                "RETURN id(v)").stream().map(node -> (Long)node.get("id(v)")).collect(Collectors.toSet());
+
+        setH_i.remove(h_j.getId());
+        setH_j.remove(h_i.getId());
+        return setH_i.containsAll(setH_j) && setH_j.containsAll(setH_i);
+    }
+
     private boolean check(Node v, int i, ArrayList<Node> order, SolutionSet mappings) {
         Node u, mapU, curr = order.get(i);
         for(int j = 0; j < i; j++) {
@@ -508,6 +661,45 @@ public class BoostIso {
                     System.out.println();
                 }
             }
+        }
+    }
+
+    private class DRT {
+        Node queryNode;
+        ArrayList<Node> nodes;
+        HashMap<Node, ArrayList<Node>> qdc_children;
+        HashMap<Node, Integer> qdc_parents;
+        HashMap<Node, ArrayList<Node>> qde_list;
+
+        public DRT(Node queryNode) {
+            this.queryNode = queryNode;
+            nodes = new ArrayList<>();
+            qdc_children = new HashMap<>();
+            qdc_parents = new HashMap<>();
+            qde_list = new HashMap<>();
+        }
+
+        public void newNode(Node dataNode) {
+            nodes.add(dataNode);
+            qdc_children.put(dataNode, new ArrayList<>());
+            qdc_parents.put(dataNode, 0);
+            qde_list.put(dataNode, new ArrayList<>());
+        }
+
+        public void addQDCChild(Node key, Node node) {
+            ArrayList<Node> value = qdc_children.get(key);
+            value.add(node);
+            qdc_children.put(key, value);
+        }
+
+        public void addQDCParent(Node key) {
+            qdc_parents.put(key, qdc_parents.get(key)+1);
+        }
+
+        public void addQDE(Node key, Node node) {
+            ArrayList<Node> value = qde_list.get(key);
+            value.add(node);
+            qde_list.put(key, value);
         }
     }
 }
