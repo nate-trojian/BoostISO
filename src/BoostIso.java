@@ -5,7 +5,6 @@ import org.neo4j.helpers.collection.FilteringIterator;
 
 import java.io.File;
 import java.util.*;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
@@ -30,13 +29,31 @@ public class BoostIso {
                     case "build":
                         boostIso.buildAdaptedGraph(Label.label(parts[1]));
                         break;
+                    //Search for 1 in 2
                     case "search":
+                        long t = -System.currentTimeMillis();
                         boostIso.naiveMatch(parts[1], parts[2]);
+                        System.out.print(t+System.currentTimeMillis());
+                        System.out.print(",");
+                        t = -System.currentTimeMillis();
                         boostIso.naiveMatchSH(parts[1], parts[2]);
+                        System.out.print(t+System.currentTimeMillis());
+                        System.out.print(",");
+                        t = -System.currentTimeMillis();
                         boostIso.naiveMatchBoost(parts[1], parts[2]);
+                        System.out.print(t+System.currentTimeMillis());
+                        System.out.print(",");
+                        t = -System.currentTimeMillis();
                         boostIso.graphQLMatch(parts[1], parts[2]);
+                        System.out.print(t+System.currentTimeMillis());
+                        System.out.print(",");
+                        t = -System.currentTimeMillis();
                         boostIso.graphQLMatchSH(parts[1], parts[2]);
+                        System.out.print(t+System.currentTimeMillis());
+                        System.out.print(",");
+                        t = -System.currentTimeMillis();
                         boostIso.graphQLMatchBoost(parts[1], parts[2]);
+                        System.out.println(t+System.currentTimeMillis());
                         break;
                     case "exit":
                     default:
@@ -92,6 +109,8 @@ public class BoostIso {
                             break;
                         }
                         v.setProperty("hyper_isClique", false);
+                        v.setProperty("hyper_SEC", new long[0]);
+
                         ArrayList<Node> SC = new ArrayList<>();
                         Iterator<Relationship> adj = v.getRelationships().iterator();
                         Relationship curEdge;
@@ -103,6 +122,7 @@ public class BoostIso {
                             if(sEquivalence(v, other)) {
                                 v.setProperty("hyper_isClique", true);
                                 other.setProperty("hyper_isHidden", true);
+                                //Neo4j uses primitives during storage instead of object class base
                                 long[] sec = (long[])v.getProperty("hyper_SEC", new long[0]);
                                 long[] newSec = Arrays.copyOf(sec, sec.length+1);
                                 newSec[sec.length] = other.getId();
@@ -118,6 +138,7 @@ public class BoostIso {
                                 other = twoStep.next();
                                 if(sEquivalence(v, other)) {
                                     other.setProperty("hyper_isHidden", true);
+                                    //Neo4j uses primitives during storage instead of object class base
                                     long[] sec = (long[])v.getProperty("hyper_SEC", new long[0]);
                                     long[] newSec = Arrays.copyOf(sec, sec.length+1);
                                     newSec[sec.length] = other.getId();
@@ -127,8 +148,8 @@ public class BoostIso {
                         }
 
                         //In place transitive reduction
-                        //Sort descending on degree, work down the path
-                        SC.sort((o1, o2) -> Integer.compare(o1.getDegree(), o2.getDegree()));
+                        //Sort DESCENDING on degree, work down the path
+                        SC.sort((o1, o2) -> Integer.compare(o2.getDegree(), o1.getDegree()));
                         ArrayList<Node> paths = new ArrayList<>();
                         //The first in this list will always be a path, don't think it changes time so leaving it
                         for(Node n: SC) {
@@ -181,8 +202,6 @@ public class BoostIso {
                 .map(r -> r.getOtherNode(u).getId()).collect(Collectors.toSet());
         Set<Long> adjV = StreamSupport.stream(v.getRelationships().spliterator(), false)
                 .map(r -> r.getOtherNode(v).getId()).collect(Collectors.toSet());
-        System.out.println("U: " + adjU);
-        System.out.println("V: " + adjV);
         if(adjU.size() > adjV.size()) return false;
         //Faster to remove now than filter after map (worse case equal but best case is faster)
         adjU.remove(v.getId());
@@ -192,7 +211,7 @@ public class BoostIso {
 
     public void naiveMatch(String queryGraphLbl, String targetGraphLbl) {
         try(Transaction tx = db.beginTx()) {
-            long t = -System.currentTimeMillis();
+            //long t = -System.currentTimeMillis();
             //Use Neo4j to get search space for each node
             HashMap<Node, ArrayList<Node>> searchSpace = new HashMap<>();
 
@@ -259,15 +278,15 @@ public class BoostIso {
             SolutionSet mappings = new SolutionSet(1000);
             backtrack(0, order, searchSpace, mappings);
 
-            System.out.println("Time Took Naive: " + (t + System.currentTimeMillis()));
-            mappings.printSolutions();
+            //System.out.println("Time Took Naive: " + (t + System.currentTimeMillis()));
+            //mappings.printSolutions();
             tx.success();
         }
     }
 
     public void naiveMatchSH(String queryGraphLbl, String targetGraphLbl) {
         try(Transaction tx = db.beginTx()) {
-            long t = -System.currentTimeMillis();
+            //long t = -System.currentTimeMillis();
             //Use Neo4j to get search space for each node
             HashMap<Node, ArrayList<Node>> searchSpace = new HashMap<>();
 
@@ -281,7 +300,8 @@ public class BoostIso {
                     if(l.name().equals(queryGraphLbl)) continue; //At least two labels, we know one, but we need the others
                     //More nodes with secondary label than graph label, so get nodes based on that
                     ResourceIterator<Node> nodes = db.findNodes(Label.label(targetGraphLbl));
-                    Iterator<Node> fromNode = new FilteringIterator<>(nodes, node -> node.hasLabel(l));
+                    Iterator<Node> fromNode = new FilteringIterator<>(nodes,
+                            node -> (node.hasLabel(l) && !(boolean)node.getProperty("isHidden", false)));
 
                     while(fromNode.hasNext()) {
                         search.add(fromNode.next());
@@ -334,15 +354,15 @@ public class BoostIso {
             SolutionSet mappings = new SolutionSet(1000);
             backtrackSH(0, order, searchSpace, mappings);
 
-            System.out.println("Time Took Naive: " + (t + System.currentTimeMillis()));
-            mappings.printSolutions();
+            //System.out.println("Time Took Naive: " + (t + System.currentTimeMillis()));
+            //mappings.printSolutions();
             tx.success();
         }
     }
 
     public void naiveMatchBoost(String queryGraphLbl, String targetGraphLbl) {
         try(Transaction tx = db.beginTx()) {
-            long t = -System.currentTimeMillis();
+            //long t = -System.currentTimeMillis();
             //Use Neo4j to get search space for each node
             HashMap<Node, ArrayList<Node>> searchSpace = new HashMap<>();
 
@@ -356,7 +376,8 @@ public class BoostIso {
                     if(l.name().equals(queryGraphLbl)) continue; //At least two labels, we know one, but we need the others
                     //More nodes with secondary label than graph label, so get nodes based on that
                     ResourceIterator<Node> nodes = db.findNodes(Label.label(targetGraphLbl));
-                    Iterator<Node> fromNode = new FilteringIterator<>(nodes, node -> node.hasLabel(l));
+                    Iterator<Node> fromNode = new FilteringIterator<>(nodes,
+                            node -> (node.hasLabel(l) && !(boolean)node.getProperty("isHidden", false)));
 
                     while(fromNode.hasNext()) {
                         search.add(fromNode.next());
@@ -410,17 +431,17 @@ public class BoostIso {
 
             //Backtrack
             SolutionSet mappings = new SolutionSet(1000);
-            subgraphSearch(0, order, searchSpace, drt, mappings);
+            if(order.size() > 0) subgraphSearch(0, order, searchSpace, drt, mappings);
 
-            System.out.println("Time Took Naive: " + (t + System.currentTimeMillis()));
-            mappings.printSolutions();
+            //System.out.println("Time Took Naive: " + (t + System.currentTimeMillis()));
+            //mappings.printSolutions();
             tx.success();
         }
     }
 
     public void graphQLMatch(String queryGraphLbl, String targetGraphLbl) {
         try(Transaction tx = db.beginTx()) {
-            long t = -System.currentTimeMillis();
+            //long t = -System.currentTimeMillis();
             //Use Neo4j to get search space for each node
             HashMap<Node, ArrayList<Node>> searchSpace = new HashMap<>();
 
@@ -500,15 +521,15 @@ public class BoostIso {
             SolutionSet mappings = new SolutionSet(1000);
             backtrack(0, order, searchSpace, mappings);
 
-            System.out.println("Time Took GraphQL: " + (t + System.currentTimeMillis()));
-            mappings.printSolutions();
+            //System.out.println("Time Took GraphQL: " + (t + System.currentTimeMillis()));
+            //mappings.printSolutions();
             tx.success();
         }
     }
 
     public void graphQLMatchSH(String queryGraphLbl, String targetGraphLbl) {
         try(Transaction tx = db.beginTx()) {
-            long t = -System.currentTimeMillis();
+            //long t = -System.currentTimeMillis();
             //Use Neo4j to get search space for each node
             HashMap<Node, ArrayList<Node>> searchSpace = new HashMap<>();
 
@@ -525,6 +546,7 @@ public class BoostIso {
                     final Map<String, Object> nProps = n.getAllProperties();
                     Iterator<Node> fromNode = new FilteringIterator<>(nodes, node -> {
                         if(!node.hasLabel(l)) return false;
+                        if((boolean)node.getProperty("isHidden", false)) return false;
                         //Profile checking
                         for(String p: nProps.keySet()) {
                             if((int) nProps.get(p) > (int) node.getProperty(p, 0)) return false;
@@ -588,15 +610,15 @@ public class BoostIso {
             SolutionSet mappings = new SolutionSet(1000);
             backtrackSH(0, order, searchSpace, mappings);
 
-            System.out.println("Time Took GraphQL: " + (t + System.currentTimeMillis()));
-            mappings.printSolutions();
+            //System.out.println("Time Took GraphQL: " + (t + System.currentTimeMillis()));
+            //mappings.printSolutions();
             tx.success();
         }
     }
 
     public void graphQLMatchBoost(String queryGraphLbl, String targetGraphLbl) {
         try(Transaction tx = db.beginTx()) {
-            long t = -System.currentTimeMillis();
+            //long t = -System.currentTimeMillis();
             //Use Neo4j to get search space for each node
             HashMap<Node, ArrayList<Node>> searchSpace = new HashMap<>();
 
@@ -613,6 +635,7 @@ public class BoostIso {
                     final Map<String, Object> nProps = n.getAllProperties();
                     Iterator<Node> fromNode = new FilteringIterator<>(nodes, node -> {
                         if(!node.hasLabel(l)) return false;
+                        if((boolean)node.getProperty("isHidden", false)) return false;
                         //Profile checking
                         for(String p: nProps.keySet()) {
                             if((int) nProps.get(p) > (int) node.getProperty(p, 0)) return false;
@@ -679,8 +702,8 @@ public class BoostIso {
             SolutionSet mappings = new SolutionSet(1000);
             subgraphSearch(0, order, searchSpace, drt, mappings);
 
-            System.out.println("Time Took GraphQL: " + (t + System.currentTimeMillis()));
-            mappings.printSolutions();
+            //System.out.println("Time Took GraphQL: " + (t + System.currentTimeMillis()));
+            //mappings.printSolutions();
             tx.success();
         }
     }
@@ -720,32 +743,39 @@ public class BoostIso {
                 mappings.nextSolution();
                 HashMap<Node, Node> prev = mappings.prevSolution(), temp = new HashMap<>(prev);
                 Collection<Long> nodesUsed = temp.values().stream().map(Node::getId)
-                        .collect(Collectors.toCollection(ConcurrentLinkedQueue::new));
-                List<Set<Long>> newMappings = temp.values().parallelStream().map(node -> {
-                    Set<Long> possValues = new HashSet<>(Arrays.asList((Long[])v.getProperty("hyper_SEC")));
-                    for(Long l: possValues) {
-                        if(nodesUsed.contains(l)) {
-                            possValues.remove(l);
+                        .collect(Collectors.toCollection(HashSet::new));
+                List<List<Node>> newMappings = temp.values().stream().map(node -> {
+                    List<Node> possValues = new ArrayList<>();
+                    long[] sec = (long[])curr.getProperty("hyper_SEC");
+                    for(long s: sec) {
+                        if(!nodesUsed.contains(s)) {
+                            possValues.add(db.getNodeById(s));
                         }
                     }
                     //Guarantee one value in set
-                    possValues.add(node.getId());
+                    possValues.add(node);
                     return possValues;
                 }).collect(Collectors.toList());
 
                 int[] indList = new int[newMappings.size()];
                 Arrays.fill(indList, 0);
                 int k=0;
-                Set<Long> tempSet;
+                List<Node> tempSet;
                 while(indList[0] < newMappings.get(0).size()) {
                     if(k == newMappings.size()) {
                         //Commit mapping
                         mappings.nextSolution();
+                        HashMap<Node, Node> tempPrev = mappings.prevSolution();
+                        for(int j = 0; j < i; j++) {
+                            mappings.put(order.get(j), tempPrev.get(order.get(j)));
+                        }
                         k--;
                     }
                     tempSet = newMappings.get(k);
                     if(indList[k] < tempSet.size()) {
                         //Add to new mapping
+                        mappings.put(order.get(k), tempSet.get(indList[k]));
+                        indList[k]++;
                         k++;
                     } else {
                         indList[k] = 0;
@@ -773,39 +803,47 @@ public class BoostIso {
             Node curr = prev.get(order.get(i-1));
 
             Collection<Long> nodesUsed = temp.values().stream().map(Node::getId)
-                    .collect(Collectors.toCollection(ConcurrentLinkedQueue::new));
-            List<Set<Long>> newMappings = temp.values().parallelStream().map(node -> {
-                Set<Long> possValues = new HashSet<>(Arrays.asList((Long[])curr.getProperty("hyper_SEC")));
-                for(Long l: possValues) {
-                    if(nodesUsed.contains(l)) {
-                        possValues.remove(l);
+                    .collect(Collectors.toCollection(HashSet::new));
+            List<List<Node>> newMappings = temp.values().stream().map(node -> {
+                List<Node> possValues = new ArrayList<>();
+                //Neo4j uses primitives during storage instead of object class base
+                long[] sec = (long[])curr.getProperty("hyper_SEC");
+                for(long s: sec) {
+                    if(!nodesUsed.contains(s)) {
+                        possValues.add(db.getNodeById(s));
                     }
                 }
                 //Guarantee one value in set
-                possValues.add(node.getId());
+                possValues.add(node);
                 return possValues;
             }).collect(Collectors.toList());
 
             int[] indList = new int[newMappings.size()];
             Arrays.fill(indList, 0);
             int k=0;
-            Set<Long> tempSet;
+            List<Node> tempSet;
             while(indList[0] < newMappings.get(0).size()) {
                 if(k == newMappings.size()) {
                     //Commit mapping
                     mappings.nextSolution();
+                    HashMap<Node, Node> tempPrev = mappings.prevSolution();
+                    for(int j = 0; j < k; j++) {
+                        mappings.put(order.get(j), tempPrev.get(order.get(j)));
+                    }
                     k--;
                 }
                 tempSet = newMappings.get(k);
                 if(indList[k] < tempSet.size()) {
                     //Add to new mapping
+                    mappings.put(order.get(k), tempSet.get(indList[k]));
+                    indList[k]++;
                     k++;
                 } else {
                     indList[k] = 0;
                     k--;
                 }
             }
-            dynamicCL(searchSpace.get(curr), curr);
+            searchSpace.put(curr, dynamicCL(drt.get(curr).getNodes(), curr));
             return true;
         }
 
@@ -825,7 +863,7 @@ public class BoostIso {
         }
         if(flag) {
             Node prevNode = order.get(i-1);
-            dynamicCL(searchSpace.get(prevNode), mappings.get(prevNode));
+            searchSpace.put(prevNode, dynamicCL(drt.get(prevNode).getNodes(), mappings.get(prevNode)));
         }
 
         searchSpace.put(curr, space);
@@ -881,12 +919,12 @@ public class BoostIso {
     // adj(h_i) - {h_j} > adj(h_j) - {h_i}
     private boolean QDC(Node u, Node h_i, Node h_j) {
         String labelString = StreamSupport.stream(u.getPropertyKeys().spliterator(), false).filter(name -> name.startsWith("profile_"))
-                .map(name -> name.substring(8)).reduce("", (a,b) -> a + "|:" + b);
-        Set<Long> setH_i = db.execute("MATCH (u)--(v" + labelString.substring(1) +  ") " +
-                "WHERE id(u)=" + h_i.getId() + " " +
+                .map(name -> name.substring(8)).reduce("", (a,b) -> a + " OR v:`" + b + "`").substring(4);
+        Set<Long> setH_i = db.execute("MATCH (u)--(v) " +
+                "WHERE id(u)=" + h_i.getId() + " AND (" + labelString + ") " +
                 "RETURN id(v)").stream().map(node -> (Long)node.get("id(v)")).collect(Collectors.toSet());
-        Set<Long> setH_j = db.execute("MATCH (u)--(v" + labelString.substring(1) +  ") " +
-                "WHERE id(u)=" + h_j.getId() + " " +
+        Set<Long> setH_j = db.execute("MATCH (u)--(v) " +
+                "WHERE id(u)=" + h_j.getId() + " AND (" + labelString + ") " +
                 "RETURN id(v)").stream().map(node -> (Long)node.get("id(v)")).collect(Collectors.toSet());
 
         setH_i.remove(h_j.getId());
@@ -897,12 +935,12 @@ public class BoostIso {
     // adj(h_i) - {h_j} = adj(h_j) - {h_i}
     private boolean QDE(Node u, Node h_i, Node h_j) {
         String labelString = StreamSupport.stream(u.getPropertyKeys().spliterator(), false).filter(name -> name.startsWith("profile_"))
-                .map(name -> name.substring(8)).reduce("", (a,b) -> a + "|:" + b);
-        Set<Long> setH_i = db.execute("MATCH (u)--(v" + labelString.substring(1) +  ") " +
-                "WHERE id(u)=" + h_i.getId() + " " +
+                .map(name -> name.substring(8)).reduce("", (a,b) -> a + " OR v:`" + b + "`").substring(4);
+        Set<Long> setH_i = db.execute("MATCH (u)--(v) " +
+                "WHERE id(u)=" + h_i.getId() + " AND (" + labelString + ") " +
                 "RETURN id(v)").stream().map(node -> (Long)node.get("id(v)")).collect(Collectors.toSet());
-        Set<Long> setH_j = db.execute("MATCH (u)--(v" + labelString.substring(1) +  ") " +
-                "WHERE id(u)=" + h_j.getId() + " " +
+        Set<Long> setH_j = db.execute("MATCH (u)--(v) " +
+                "WHERE id(u)=" + h_j.getId() + " AND (" + labelString + ") " +
                 "RETURN id(v)").stream().map(node -> (Long)node.get("id(v)")).collect(Collectors.toSet());
 
         setH_i.remove(h_j.getId());
