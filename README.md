@@ -12,7 +12,7 @@ The project uses datasets which can be obtained from the following links
      
 There are two java files :
     -   Neo4jLoader.java
-            * This file loads the above datasets into the neo4j database. You can run the program by first compiling it using the following     command : javac Neo4jLoader.java
+          Markup : *  This file loads the above datasets into the neo4j database. You can run the program by first compiling it using the following command : javac Neo4jLoader.java
 
             * Run this file with the desired path to a new Neo4j database:
               command : java Neo4jLoader path
@@ -27,7 +27,7 @@ There are two java files :
               command : exit
 
     -   BoostIso.java
-            * This file implements the Boost ISO algorithm on the above datasets. You can run the program by first compiling it using the       following command : javac BoostIso.java
+            Markup : * This file implements the Boost ISO algorithm on the above datasets. You can run the program by first compiling it using the following command : javac BoostIso.java
 
             * We can then run this file against the dataset of our choice by using the following commands : 
                 Human, Yeast dataset -
@@ -35,3 +35,5 @@ There are two java files :
                 WordNet dataset -
                     java BoostIso net
     
+    - ProjectLoader
+            This file specifies the usage of each of the datasets for the loader program.
