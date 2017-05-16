@@ -6,7 +6,7 @@
 This project is an implementation of the Boost ISO algorithm based on the paper "Exploiting vertex relationships in speeding up subgraph isomorphism over large graphs" by Ren X. and Wang J.
 The project requires Java 8 and neo4j 2.0+  
 
-The project uses datasets which can be obtained from the following links 
+The project uses datasets which can be obtained from the following links  
      * WordNet - http://vlado.fmf.uni-lj.si/pub/networks/data/dic/Wordnet/Wordnet.htm
      * Human, Yeast - GraphQL Homework
      
