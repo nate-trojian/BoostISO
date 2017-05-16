@@ -31,11 +31,13 @@ There are two java files :
     * BoostIso.java  
         * This file implements the Boost ISO algorithm on the above datasets. You can run the program by first compiling it using the following command : javac BoostIso.java
 
-        * We can then run this file against the dataset of our choice by using the following commands : 
-            Human, Yeast dataset -
-                java BoostIso igraph    
-            WordNet dataset -
-                java BoostIso net
+        * We can then run this file against the database of our choice by using the following commands : 
+            java BoostIso path_to_database
+            
+        * Available commands :
+                build label - Builds adapted hypergraph from nodes with label
+                search query_graph_label target_graph_label - Performs all 6 search algorithms on hypergraphs using pattern graph with label query_graph_label on target graph with label target_graph_label
+                exit
     
     * ProjectLoader   
         This file specifies the usage of each of the datasets for the loader program.
