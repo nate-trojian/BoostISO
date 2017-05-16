@@ -31,16 +31,12 @@ public class BoostIso {
                         boostIso.buildAdaptedGraph(Label.label(parts[1]));
                         break;
                     case "search":
-                        //Split by method
-                        switch(parts[1].toLowerCase()) {
-                            case "graphql":
-                                boostIso.graphQLMatch(parts[2], parts[3]);
-                                break;
-                            case "naive":
-                            default:
-                                boostIso.naiveMatch(parts[2], parts[3]);
-                                break;
-                        }
+                        boostIso.naiveMatch(parts[1], parts[2]);
+                        boostIso.naiveMatchSH(parts[1], parts[2]);
+                        boostIso.naiveMatchBoost(parts[1], parts[2]);
+                        boostIso.graphQLMatch(parts[1], parts[2]);
+                        boostIso.graphQLMatchSH(parts[1], parts[2]);
+                        boostIso.graphQLMatchBoost(parts[1], parts[2]);
                         break;
                     case "exit":
                     default:
@@ -107,8 +103,8 @@ public class BoostIso {
                             if(sEquivalence(v, other)) {
                                 v.setProperty("hyper_isClique", true);
                                 other.setProperty("hyper_isHidden", true);
-                                Long[] sec = (Long[])v.getProperty("hyper_SEC", new Long[0]);
-                                Long[] newSec = Arrays.copyOf(sec, sec.length+1);
+                                long[] sec = (long[])v.getProperty("hyper_SEC", new long[0]);
+                                long[] newSec = Arrays.copyOf(sec, sec.length+1);
                                 newSec[sec.length] = other.getId();
                                 v.setProperty("hyper_SEC", newSec);
                             } else if(sContainment(v, other)) SC.add(other);  //SC-Children
@@ -122,8 +118,8 @@ public class BoostIso {
                                 other = twoStep.next();
                                 if(sEquivalence(v, other)) {
                                     other.setProperty("hyper_isHidden", true);
-                                    Long[] sec = (Long[])v.getProperty("hyper_SEC", new Long[0]);
-                                    Long[] newSec = Arrays.copyOf(sec, sec.length+1);
+                                    long[] sec = (long[])v.getProperty("hyper_SEC", new long[0]);
+                                    long[] newSec = Arrays.copyOf(sec, sec.length+1);
                                     newSec[sec.length] = other.getId();
                                     v.setProperty("hyper_SEC", newSec);
                                 } else if(sContainment(v, other)) SC.add(other);  //SC-Children
@@ -269,6 +265,159 @@ public class BoostIso {
         }
     }
 
+    public void naiveMatchSH(String queryGraphLbl, String targetGraphLbl) {
+        try(Transaction tx = db.beginTx()) {
+            long t = -System.currentTimeMillis();
+            //Use Neo4j to get search space for each node
+            HashMap<Node, ArrayList<Node>> searchSpace = new HashMap<>();
+
+            ResourceIterator<Node> queryGraph = db.findNodes(Label.label(queryGraphLbl));
+            Node n;
+            ArrayList<Node> search;
+            while(queryGraph.hasNext()) {
+                n = queryGraph.next();
+                search = new ArrayList<>();
+                for(Label l: n.getLabels()) {
+                    if(l.name().equals(queryGraphLbl)) continue; //At least two labels, we know one, but we need the others
+                    //More nodes with secondary label than graph label, so get nodes based on that
+                    ResourceIterator<Node> nodes = db.findNodes(Label.label(targetGraphLbl));
+                    Iterator<Node> fromNode = new FilteringIterator<>(nodes, node -> node.hasLabel(l));
+
+                    while(fromNode.hasNext()) {
+                        search.add(fromNode.next());
+                    }
+                }
+                //Simple optimization
+                if(search.size() == 0) {
+                    System.out.println("No Solutions");
+                    return;
+                }
+                searchSpace.put(n, search);
+            }
+
+            //Pick order
+            ArrayList<Node> order = new ArrayList<>(), size = new ArrayList<>();
+
+            Iterator<Node> searchIt = searchSpace.keySet().iterator(); //Randomly sorts keys
+            HashMap<Node, Integer> sizeMap = new HashMap<>();
+            Node temp;
+            while(searchIt.hasNext()) {
+                temp = searchIt.next();
+                sizeMap.put(temp, searchSpace.get(temp).size());
+                size.add(temp);
+            }
+            size.sort((o1, o2) -> sizeMap.get(o1).compareTo(sizeMap.get(o2)));
+            PriorityQueue<Node> queue = new PriorityQueue<>((o1, o2) -> sizeMap.get(o1).compareTo(sizeMap.get(o2)));
+
+            while(!size.isEmpty()) {
+                //Get the node with the lowest search space to start each connected area of the query
+                queue.add(size.remove(0));
+
+                //The queue can become empty without us getting a full ordering, so we have it in a bigger while loop
+                Iterable<Relationship> edges;
+                while(!queue.isEmpty()) {
+                    temp = queue.remove();
+                    order.add(temp);
+                    size.remove(temp);
+                    edges = temp.getRelationships();
+                    for(Relationship r : edges) {
+                        Node other = r.getOtherNode(temp);
+                        //Don't add visited nodes (Would be quicker to have a boolean hashmap, but meh)
+                        if(!order.contains(other) && !queue.contains(other)) {
+                            queue.add(other);
+                        }
+                    }
+                }
+            }
+
+            //Backtrack
+            SolutionSet mappings = new SolutionSet(1000);
+            backtrackSH(0, order, searchSpace, mappings);
+
+            System.out.println("Time Took Naive: " + (t + System.currentTimeMillis()));
+            mappings.printSolutions();
+            tx.success();
+        }
+    }
+
+    public void naiveMatchBoost(String queryGraphLbl, String targetGraphLbl) {
+        try(Transaction tx = db.beginTx()) {
+            long t = -System.currentTimeMillis();
+            //Use Neo4j to get search space for each node
+            HashMap<Node, ArrayList<Node>> searchSpace = new HashMap<>();
+
+            ResourceIterator<Node> queryGraph = db.findNodes(Label.label(queryGraphLbl));
+            Node n;
+            ArrayList<Node> search;
+            while(queryGraph.hasNext()) {
+                n = queryGraph.next();
+                search = new ArrayList<>();
+                for(Label l: n.getLabels()) {
+                    if(l.name().equals(queryGraphLbl)) continue; //At least two labels, we know one, but we need the others
+                    //More nodes with secondary label than graph label, so get nodes based on that
+                    ResourceIterator<Node> nodes = db.findNodes(Label.label(targetGraphLbl));
+                    Iterator<Node> fromNode = new FilteringIterator<>(nodes, node -> node.hasLabel(l));
+
+                    while(fromNode.hasNext()) {
+                        search.add(fromNode.next());
+                    }
+                }
+                //Simple optimization
+                if(search.size() == 0) {
+                    System.out.println("No Solutions");
+                    return;
+                }
+                searchSpace.put(n, search);
+            }
+
+            //Pick order
+            ArrayList<Node> order = new ArrayList<>(), size = new ArrayList<>();
+
+            Iterator<Node> searchIt = searchSpace.keySet().iterator(); //Randomly sorts keys
+            HashMap<Node, Integer> sizeMap = new HashMap<>();
+            Node temp;
+            while(searchIt.hasNext()) {
+                temp = searchIt.next();
+                sizeMap.put(temp, searchSpace.get(temp).size());
+                size.add(temp);
+            }
+            size.sort((o1, o2) -> sizeMap.get(o1).compareTo(sizeMap.get(o2)));
+            PriorityQueue<Node> queue = new PriorityQueue<>((o1, o2) -> sizeMap.get(o1).compareTo(sizeMap.get(o2)));
+
+            while(!size.isEmpty()) {
+                //Get the node with the lowest search space to start each connected area of the query
+                queue.add(size.remove(0));
+
+                //The queue can become empty without us getting a full ordering, so we have it in a bigger while loop
+                Iterable<Relationship> edges;
+                while(!queue.isEmpty()) {
+                    temp = queue.remove();
+                    order.add(temp);
+                    size.remove(temp);
+                    edges = temp.getRelationships();
+                    for(Relationship r : edges) {
+                        Node other = r.getOtherNode(temp);
+                        //Don't add visited nodes (Would be quicker to have a boolean hashmap, but meh)
+                        if(!order.contains(other) && !queue.contains(other)) {
+                            queue.add(other);
+                        }
+                    }
+                }
+            }
+
+            //Build drt
+            HashMap<Node, DRT> drt = buildDRT(Label.label(queryGraphLbl), searchSpace);
+
+            //Backtrack
+            SolutionSet mappings = new SolutionSet(1000);
+            subgraphSearch(0, order, searchSpace, drt, mappings);
+
+            System.out.println("Time Took Naive: " + (t + System.currentTimeMillis()));
+            mappings.printSolutions();
+            tx.success();
+        }
+    }
+
     public void graphQLMatch(String queryGraphLbl, String targetGraphLbl) {
         try(Transaction tx = db.beginTx()) {
             long t = -System.currentTimeMillis();
@@ -357,6 +506,185 @@ public class BoostIso {
         }
     }
 
+    public void graphQLMatchSH(String queryGraphLbl, String targetGraphLbl) {
+        try(Transaction tx = db.beginTx()) {
+            long t = -System.currentTimeMillis();
+            //Use Neo4j to get search space for each node
+            HashMap<Node, ArrayList<Node>> searchSpace = new HashMap<>();
+
+            ResourceIterator<Node> queryGraph = db.findNodes(Label.label(queryGraphLbl));
+            Node n;
+            ArrayList<Node> search;
+            while(queryGraph.hasNext()) {
+                n = queryGraph.next();
+                search = new ArrayList<>();
+                for(Label l: n.getLabels()) {
+                    if(l.name().equals(queryGraphLbl)) continue; //At least two labels, we know one, but we need the others
+                    //More nodes with secondary label than graph label, so get nodes based on that
+                    ResourceIterator<Node> nodes = db.findNodes(Label.label(targetGraphLbl));
+                    final Map<String, Object> nProps = n.getAllProperties();
+                    Iterator<Node> fromNode = new FilteringIterator<>(nodes, node -> {
+                        if(!node.hasLabel(l)) return false;
+                        //Profile checking
+                        for(String p: nProps.keySet()) {
+                            if((int) nProps.get(p) > (int) node.getProperty(p, 0)) return false;
+                        }
+                        return true;
+                    });
+                    while(fromNode.hasNext()) {
+                        search.add(fromNode.next());
+                    }
+                }
+                //Simple optimization
+                if(search.size() == 0) {
+                    System.out.println("No Solutions");
+                    return;
+                }
+                searchSpace.put(n, search);
+            }
+
+            //Pick order
+            ArrayList<Node> order = new ArrayList<>(), size = new ArrayList<>();
+            Iterator<Node> searchIt = searchSpace.keySet().iterator(); //Randomly sorts keys
+            HashMap<Node, Integer> sizeMap = new HashMap<>();
+            HashMap<Node, Integer> reduceFactor = new HashMap<>();
+            Node temp;
+            while(searchIt.hasNext()) {
+                temp = searchIt.next();
+                sizeMap.put(temp, searchSpace.get(temp).size());
+                size.add(temp);
+            }
+            size.sort((o1, o2) -> sizeMap.get(o1).compareTo(sizeMap.get(o2)));
+            PriorityQueue<Node> queue = new PriorityQueue<>((o1, o2) -> {
+                Double s1 = sizeMap.get(o1) * Math.pow(2, -reduceFactor.getOrDefault(o1, 0));
+                Double s2 = sizeMap.get(o2) * Math.pow(2, -reduceFactor.getOrDefault(o2, 0));
+                return s1.compareTo(s2);
+            });
+
+            while(!size.isEmpty()) {
+                //Get the node with the lowest search space to start each connected area of the query
+                queue.add(size.remove(0));
+
+                //The queue can become empty without us getting a full ordering, so we have it in a bigger while loop
+                Iterable<Relationship> edges;
+                while(!queue.isEmpty()) {
+                    temp = queue.remove();
+                    order.add(temp);
+                    size.remove(temp);
+                    edges = temp.getRelationships();
+                    for(Relationship r : edges) {
+                        Node other = r.getOtherNode(temp);
+                        //Don't add visited nodes (Would be quicker to have a boolean hashmap, but meh)
+                        if(!order.contains(other) && !queue.contains(other)) {
+                            //Update reduce factor before adding to queue
+                            reduceFactor.put(other, reduceFactor.getOrDefault(other, 0)+1);
+                            queue.add(other);
+                        }
+                    }
+                }
+            }
+
+            //Backtrack
+            SolutionSet mappings = new SolutionSet(1000);
+            backtrackSH(0, order, searchSpace, mappings);
+
+            System.out.println("Time Took GraphQL: " + (t + System.currentTimeMillis()));
+            mappings.printSolutions();
+            tx.success();
+        }
+    }
+
+    public void graphQLMatchBoost(String queryGraphLbl, String targetGraphLbl) {
+        try(Transaction tx = db.beginTx()) {
+            long t = -System.currentTimeMillis();
+            //Use Neo4j to get search space for each node
+            HashMap<Node, ArrayList<Node>> searchSpace = new HashMap<>();
+
+            ResourceIterator<Node> queryGraph = db.findNodes(Label.label(queryGraphLbl));
+            Node n;
+            ArrayList<Node> search;
+            while(queryGraph.hasNext()) {
+                n = queryGraph.next();
+                search = new ArrayList<>();
+                for(Label l: n.getLabels()) {
+                    if(l.name().equals(queryGraphLbl)) continue; //At least two labels, we know one, but we need the others
+                    //More nodes with secondary label than graph label, so get nodes based on that
+                    ResourceIterator<Node> nodes = db.findNodes(Label.label(targetGraphLbl));
+                    final Map<String, Object> nProps = n.getAllProperties();
+                    Iterator<Node> fromNode = new FilteringIterator<>(nodes, node -> {
+                        if(!node.hasLabel(l)) return false;
+                        //Profile checking
+                        for(String p: nProps.keySet()) {
+                            if((int) nProps.get(p) > (int) node.getProperty(p, 0)) return false;
+                        }
+                        return true;
+                    });
+                    while(fromNode.hasNext()) {
+                        search.add(fromNode.next());
+                    }
+                }
+                //Simple optimization
+                if(search.size() == 0) {
+                    System.out.println("No Solutions");
+                    return;
+                }
+                searchSpace.put(n, search);
+            }
+
+            //Pick order
+            ArrayList<Node> order = new ArrayList<>(), size = new ArrayList<>();
+            Iterator<Node> searchIt = searchSpace.keySet().iterator(); //Randomly sorts keys
+            HashMap<Node, Integer> sizeMap = new HashMap<>();
+            HashMap<Node, Integer> reduceFactor = new HashMap<>();
+            Node temp;
+            while(searchIt.hasNext()) {
+                temp = searchIt.next();
+                sizeMap.put(temp, searchSpace.get(temp).size());
+                size.add(temp);
+            }
+            size.sort((o1, o2) -> sizeMap.get(o1).compareTo(sizeMap.get(o2)));
+            PriorityQueue<Node> queue = new PriorityQueue<>((o1, o2) -> {
+                Double s1 = sizeMap.get(o1) * Math.pow(2, -reduceFactor.getOrDefault(o1, 0));
+                Double s2 = sizeMap.get(o2) * Math.pow(2, -reduceFactor.getOrDefault(o2, 0));
+                return s1.compareTo(s2);
+            });
+
+            while(!size.isEmpty()) {
+                //Get the node with the lowest search space to start each connected area of the query
+                queue.add(size.remove(0));
+
+                //The queue can become empty without us getting a full ordering, so we have it in a bigger while loop
+                Iterable<Relationship> edges;
+                while(!queue.isEmpty()) {
+                    temp = queue.remove();
+                    order.add(temp);
+                    size.remove(temp);
+                    edges = temp.getRelationships();
+                    for(Relationship r : edges) {
+                        Node other = r.getOtherNode(temp);
+                        //Don't add visited nodes (Would be quicker to have a boolean hashmap, but meh)
+                        if(!order.contains(other) && !queue.contains(other)) {
+                            //Update reduce factor before adding to queue
+                            reduceFactor.put(other, reduceFactor.getOrDefault(other, 0)+1);
+                            queue.add(other);
+                        }
+                    }
+                }
+            }
+
+            //Build drt
+            HashMap<Node, DRT> drt = buildDRT(Label.label(queryGraphLbl), searchSpace);
+
+            //Backtrack
+            SolutionSet mappings = new SolutionSet(1000);
+            subgraphSearch(0, order, searchSpace, drt, mappings);
+
+            System.out.println("Time Took GraphQL: " + (t + System.currentTimeMillis()));
+            mappings.printSolutions();
+            tx.success();
+        }
+    }
+
     private boolean backtrack(int i, ArrayList<Node> order, HashMap<Node, ArrayList<Node>> searchSpace,
                               SolutionSet mappings) {
         if(mappings.isFilled()) return false;
@@ -433,9 +761,8 @@ public class BoostIso {
         return false;
     }
 
-    //TODO Put dynamicCL return in searchSpace
     private boolean subgraphSearch(int i, ArrayList<Node> order, HashMap<Node, ArrayList<Node>> searchSpace,
-                                SolutionSet mappings) {
+                                HashMap<Node, DRT> drt, SolutionSet mappings) {
         if(mappings.isFilled()) return false;
 
         boolean flag = false;
@@ -488,7 +815,7 @@ public class BoostIso {
         for(Node v: space) {
             if(mappings.inSolution(v) || !check(v, i, order, mappings)) continue;
             mappings.put(curr, v);
-            if(subgraphSearch(i+1, order, searchSpace, mappings)) {
+            if(subgraphSearch(i+1, order, searchSpace, drt, mappings)) {
                 HashMap<Node, Node> prev = mappings.prevSolution();
                 for(int j = 0; j < i; j++) {
                     mappings.put(order.get(j), prev.get(order.get(j)));
@@ -512,7 +839,6 @@ public class BoostIso {
                 "RETURN DISTINCT id(v), p AS Path, LENGTH(p) AS PathSize " +
                 "ORDER BY PathSize"
         ).stream().<Node>map(n -> db.getNodeById((Long) n.get("id(v)"))).forEach(ret::add);
-        //TODO Add in QDC-Children for loop
         return ret;
     }
 
@@ -611,7 +937,6 @@ public class BoostIso {
         if(db != null) db.shutdown();
     }
 
-    //TODO - Probably should redo this
     private class SolutionSet {
         private int index, max;
         private ArrayList<HashMap<Node, Node>> mappings;
@@ -687,19 +1012,26 @@ public class BoostIso {
         }
 
         public void addQDCChild(Node key, Node node) {
+            if(!nodes.contains(key)) newNode(key);
             ArrayList<Node> value = qdc_children.get(key);
             value.add(node);
             qdc_children.put(key, value);
         }
 
         public void addQDCParent(Node key) {
+            if(!nodes.contains(key)) newNode(key);
             qdc_parents.put(key, qdc_parents.get(key)+1);
         }
 
         public void addQDE(Node key, Node node) {
+            if(!nodes.contains(key)) newNode(key);
             ArrayList<Node> value = qde_list.get(key);
             value.add(node);
             qde_list.put(key, value);
+        }
+
+        public ArrayList<Node> getNodes() {
+            return nodes;
         }
     }
 }
