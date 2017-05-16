@@ -7,7 +7,7 @@ This project is an implementation of the Boost ISO algorithm based on the paper 
 The project requires Java 8 and neo4j 2.0+  
 
 The project uses datasets which can be obtained from the following links  
-     * WordNet - http://vlado.fmf.uni-lj.si/pub/networks/data/dic/Wordnet/Wordnet.htm
+     * WordNet - http://vlado.fmf.uni-lj.si/pub/networks/data/dic/Wordnet/Wordnet.htm  
      * Human, Yeast - GraphQL Homework
      
 There are two java files : 
@@ -38,4 +38,4 @@ There are two java files :
                 java BoostIso net
     
     * ProjectLoader   
-            This file specifies the usage of each of the datasets for the loader program.
+        This file specifies the usage of each of the datasets for the loader program.
